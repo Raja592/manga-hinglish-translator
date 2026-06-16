@@ -53,7 +53,7 @@ class FloatingOverlayService : Service() {
     private var pendingResultCode: Int = 0
     private var pendingResultData: Intent? = null
 
-    override fun onBind(intent: IBinder?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
