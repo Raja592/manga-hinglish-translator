@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <ImageButton
+        android:id="@+id/ibTranslate"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:background="@drawable/bg_floating_button"
+        android:contentDescription="Translate manga screen"
+        android:elevation="8dp"
+        android:padding="12dp"
+        android:src="@drawable/ic_translate"
+        android:tint="@android:color/white" />
+
+</FrameLayout>
