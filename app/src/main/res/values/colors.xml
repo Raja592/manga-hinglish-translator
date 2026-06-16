@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark theme backgrounds -->
+    <color name="bg_dark">#0F0F13</color>
+    <color name="card_dark">#1A1A24</color>
+    <color name="bg_original">#12121A</color>
+    <color name="bg_translated">#1A1232</color>
+
+    <!-- Text -->
+    <color name="text_primary">#F0F0F8</color>
+    <color name="text_secondary">#8888AA</color>
+
+    <!-- Accent -->
+    <color name="accent_purple">#8B5CF6</color>
+    <color name="accent_purple_dark">#6D28D9</color>
+
+    <!-- Status -->
+    <color name="color_success">#22C55E</color>
+    <color name="color_warning">#F59E0B</color>
+    <color name="color_error">#EF4444</color>
+
+    <!-- Misc -->
+    <color name="divider_color">#2A2A3A</color>
+</resources>
