@@ -1,0 +1,4 @@
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.ai.client.** { *; }
+-dontwarn com.google.ai.client.**
+-keep class kotlinx.coroutines.** { *; }
