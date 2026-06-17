@@ -1,21 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Overlay / Floating window permission -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
-    <!-- Foreground service for MediaProjection and overlay -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-
-    <!-- Internet for Gemini API -->
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!-- Vibration feedback -->
     <uses-permission android:name="android.permission.VIBRATE" />
-
-    <!-- Post notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -26,7 +17,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MangaHinglishTranslator">
 
-        <!-- Main setup activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -38,21 +28,18 @@
             </intent-filter>
         </activity>
 
-        <!-- Translation result overlay -->
         <activity
             android:name=".TranslationResultActivity"
             android:exported="false"
             android:theme="@style/Theme.TransparentOverlay"
             android:launchMode="singleInstance" />
 
-        <!-- Screen capture permission dialog (transparent, no UI flash) -->
         <activity
             android:name=".ScreenCapturePermissionActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:launchMode="singleInstance" />
 
-        <!-- Floating overlay + screen capture service -->
         <service
             android:name=".FloatingOverlayService"
             android:exported="false"
@@ -63,5 +50,4 @@
         </service>
 
     </application>
-
 </manifest>
