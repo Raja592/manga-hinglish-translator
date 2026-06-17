@@ -14,7 +14,7 @@ class GeminiTranslator(private val apiKey: String) {
 
     companion object {
         private const val GEMINI_ENDPOINT =
-            ""            "            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 
         private val SYSTEM_PROMPT = """
 You are a manga dialogue Hinglish translator. Your job is to translate English manga dialogue into natural Indian Hinglish.
