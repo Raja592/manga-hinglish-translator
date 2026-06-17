@@ -43,10 +43,10 @@ class FloatingOverlayService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var floatingView: View? = null
+
+    // MediaProjection is created ONCE and reused — never recreated unless it dies
     private var mediaProjection: MediaProjection? = null
     private var imageReader: ImageReader? = null
-    private var pendingResultCode: Int = 0
-    private var pendingResultData: Intent? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val handler = Handler(Looper.getMainLooper())
@@ -63,20 +63,25 @@ class FloatingOverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        intent?.let { incomingIntent ->
-            val resultCode = incomingIntent.getIntExtra(EXTRA_RESULT_CODE, 0)
+        val action = intent?.action
+        if (action == ACTION_PROJECTION_GRANTED) {
+            val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
             val resultData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                incomingIntent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+                intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
             } else {
                 @Suppress("DEPRECATION")
-                incomingIntent.getParcelableExtra(EXTRA_RESULT_DATA)
+                intent.getParcelableExtra(EXTRA_RESULT_DATA)
             }
             if (resultCode != 0 && resultData != null) {
-                pendingResultCode = resultCode
-                pendingResultData = resultData
-                // Auto-capture when permission is freshly granted
-                if (incomingIntent.action == ACTION_PROJECTION_GRANTED) {
+                // Create MediaProjection IMMEDIATELY on permission grant — only done ONCE
+                try {
+                    val pm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    mediaProjection?.stop()
+                    mediaProjection = pm.getMediaProjection(resultCode, resultData)
+                    // Auto-capture after short delay
                     handler.postDelayed({ triggerCapture() }, 700)
+                } catch (e: Exception) {
+                    showToast("Screen capture setup failed: " + (e.message ?: ""))
                 }
             }
         }
@@ -145,7 +150,8 @@ class FloatingOverlayService : Service() {
         floatingView?.visibility = View.INVISIBLE
 
         handler.postDelayed({
-            if (pendingResultData == null || pendingResultCode == 0) {
+            if (mediaProjection == null) {
+                // Only ask for permission if we don't have a valid MediaProjection
                 floatingView?.visibility = View.VISIBLE
                 btn.isEnabled = true
                 val intent = Intent(this, ScreenCapturePermissionActivity::class.java).apply {
@@ -169,7 +175,7 @@ class FloatingOverlayService : Service() {
                 }
 
                 if (bitmap == null) {
-                    showToast("Screen capture nahi hua. Dobara try karo.")
+                    showToast("Screen capture nahi hua — dobara tap karo.")
                     return@launch
                 }
 
@@ -204,57 +210,54 @@ class FloatingOverlayService : Service() {
                 handler.post {
                     floatingView?.visibility = View.VISIBLE
                     btn.isEnabled = true
-                    val msg = e.message ?: "Unknown error"
-                    showToast("Error: " + msg.take(100))
+                    // If projection is dead, reset so user can grant again
+                    val errMsg = e.message ?: ""
+                    if (errMsg.contains("MediaProjection") || errMsg.contains("projection")) {
+                        mediaProjection = null
+                        showToast("Screen permission expire hua. Dobara tap karke allow karo.")
+                    } else {
+                        showToast("Error: " + errMsg.take(80))
+                    }
                 }
             }
         }
     }
 
     private fun captureScreen(): Bitmap? {
-        return try {
-            if (mediaProjection == null) {
-                val pm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                mediaProjection = pm.getMediaProjection(pendingResultCode, pendingResultData!!)
-            }
-            val metrics = resources.displayMetrics
-            val width = metrics.widthPixels
-            val height = metrics.heightPixels
-            val density = metrics.densityDpi
+        val mp = mediaProjection ?: return null
 
-            imageReader?.close()
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        val metrics = resources.displayMetrics
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        val density = metrics.densityDpi
 
-            val vd = mediaProjection!!.createVirtualDisplay(
-                "ScreenCapture", width, height, density,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader!!.surface, null, null
-            )
-            Thread.sleep(500)
+        imageReader?.close()
+        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
 
-            val image = imageReader!!.acquireLatestImage()
-            val bmp = if (image != null) {
-                val planes = image.planes
-                val buffer = planes[0].buffer
-                val pixelStride = planes[0].pixelStride
-                val rowStride = planes[0].rowStride
-                val rowPadding = rowStride - pixelStride * width
-                val raw = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
-                raw.copyPixelsFromBuffer(buffer)
-                image.close()
-                Bitmap.createBitmap(raw, 0, 0, width, height)
-            } else null
+        // VirtualDisplay is created fresh each capture, released after — MediaProjection stays alive
+        val vd = mp.createVirtualDisplay(
+            "ScreenCapture", width, height, density,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader!!.surface, null, null
+        )
 
-            vd.release()
-            bmp
-        } catch (e: Exception) {
-            // Projection may have expired — reset so next tap asks again
-            mediaProjection?.stop()
-            mediaProjection = null
-            pendingResultCode = 0
-            pendingResultData = null
-            null
-        }
+        Thread.sleep(500)
+
+        val image = imageReader!!.acquireLatestImage()
+        val bmp = if (image != null) {
+            val planes = image.planes
+            val buffer = planes[0].buffer
+            val pixelStride = planes[0].pixelStride
+            val rowStride = planes[0].rowStride
+            val rowPadding = rowStride - pixelStride * width
+            val raw = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
+            raw.copyPixelsFromBuffer(buffer)
+            image.close()
+            Bitmap.createBitmap(raw, 0, 0, width, height)
+        } else null
+
+        vd.release()
+        return bmp
     }
 
     private fun showToast(msg: String) {
@@ -267,6 +270,7 @@ class FloatingOverlayService : Service() {
         floatingView?.let { windowManager.removeView(it) }
         imageReader?.close()
         mediaProjection?.stop()
+        mediaProjection = null
     }
 
     private fun createNotificationChannel() {
