@@ -150,4 +150,4 @@ The system prompt instructs Gemini to:
 
 ## License
 
-MIT — free to use, modify, and distribute.
+MIT — free to use, modify, and distribute. 
