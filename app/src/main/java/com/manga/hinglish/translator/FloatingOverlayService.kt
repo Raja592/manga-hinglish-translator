@@ -29,10 +29,15 @@ import kotlinx.coroutines.launch
 class FloatingOverlayService : Service() {
 
     companion object {
-        var isRunning = false
-        private const val CHANNEL_ID = "manga_translator_channel"
-        private const val NOTIF_ID = 1001
-    }
+    var isRunning = false
+
+    const val ACTION_PROJECTION_GRANTED = "ACTION_PROJECTION_GRANTED"
+    const val EXTRA_RESULT_CODE = "extra_result_code"
+    const val EXTRA_RESULT_DATA = "extra_result_data"
+
+    private const val CHANNEL_ID = "manga_translator_channel"
+    private const val NOTIF_ID = 1001
+}
 
     private lateinit var windowManager: WindowManager
     private var floatingView: View? = null
