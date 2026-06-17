@@ -45,6 +45,13 @@
             android:theme="@style/Theme.TransparentOverlay"
             android:launchMode="singleInstance" />
 
+        <!-- Screen capture permission dialog (transparent, no UI flash) -->
+        <activity
+            android:name=".ScreenCapturePermissionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:launchMode="singleInstance" />
+
         <!-- Floating overlay + screen capture service -->
         <service
             android:name=".FloatingOverlayService"
