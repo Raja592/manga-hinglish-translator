@@ -6,7 +6,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -35,6 +34,7 @@ class FloatingOverlayService : Service() {
 
     companion object {
         var isRunning = false
+        const val ACTION_PROJECTION_GRANTED = "ACTION_PROJECTION_GRANTED"
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "manga_translator_channel"
@@ -45,15 +45,13 @@ class FloatingOverlayService : Service() {
     private var floatingView: View? = null
     private var mediaProjection: MediaProjection? = null
     private var imageReader: ImageReader? = null
+    private var pendingResultCode: Int = 0
+    private var pendingResultData: Intent? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val handler = Handler(Looper.getMainLooper())
 
-    // Stored projection intent for lazy start
-    private var pendingResultCode: Int = 0
-    private var pendingResultData: Intent? = null
-
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: IBinder?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -66,12 +64,19 @@ class FloatingOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
-            pendingResultCode = it.getIntExtra(EXTRA_RESULT_CODE, 0)
-            pendingResultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val resultCode = it.getIntExtra(EXTRA_RESULT_CODE, 0)
+            val resultData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 it.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
             } else {
                 @Suppress("DEPRECATION")
                 it.getParcelableExtra(EXTRA_RESULT_DATA)
+            }
+            if (resultCode != 0 && resultData != null) {
+                pendingResultCode = resultCode
+                pendingResultData = resultData
+                if (it.action == ACTION_PROJECTION_GRANTED) {
+                    handler.postDelayed({ triggerCapture() }, 600)
+                }
             }
         }
         return START_STICKY
@@ -94,35 +99,28 @@ class FloatingOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 100
+            x = 50
             y = 300
         }
 
         windowManager.addView(floatingView, params)
 
         val btn = floatingView!!.findViewById<ImageButton>(R.id.ibTranslate)
-
-        // Make button draggable
-        var initialX = 0
-        var initialY = 0
-        var initialTouchX = 0f
-        var initialTouchY = 0f
+        var initialX = 0; var initialY = 0
+        var initialTouchX = 0f; var initialTouchY = 0f
         var isDragging = false
 
         btn.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    initialX = params.x
-                    initialY = params.y
-                    initialTouchX = event.rawX
-                    initialTouchY = event.rawY
-                    isDragging = false
-                    true
+                    initialX = params.x; initialY = params.y
+                    initialTouchX = event.rawX; initialTouchY = event.rawY
+                    isDragging = false; true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - initialTouchX).toInt()
                     val dy = (event.rawY - initialTouchY).toInt()
-                    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) isDragging = true
+                    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) isDragging = true
                     if (isDragging) {
                         params.x = initialX + dx
                         params.y = initialY + dy
@@ -131,7 +129,7 @@ class FloatingOverlayService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!isDragging) onCaptureClicked()
+                    if (!isDragging) triggerCapture()
                     true
                 }
                 else -> false
@@ -139,121 +137,117 @@ class FloatingOverlayService : Service() {
         }
     }
 
-    private fun onCaptureClicked() {
+    private fun triggerCapture() {
         val btn = floatingView?.findViewById<ImageButton>(R.id.ibTranslate) ?: return
         btn.isEnabled = false
-
-        // Hide the floating button briefly so it doesn't appear in capture
         floatingView?.visibility = View.INVISIBLE
 
         handler.postDelayed({
-            captureAndTranslate(btn)
-        }, 200) // small delay to let the button disappear from screen
+            if (pendingResultData == null || pendingResultCode == 0) {
+                floatingView?.visibility = View.VISIBLE
+                btn.isEnabled = true
+                val intent = Intent(this, ScreenCapturePermissionActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                startActivity(intent)
+            } else {
+                performCaptureAndTranslate(btn)
+            }
+        }, 300)
     }
 
-    private fun captureAndTranslate(btn: ImageButton) {
-        if (pendingResultData == null || pendingResultCode == 0) {
-            // Need to request screen capture permission first
-            floatingView?.visibility = View.VISIBLE
-            btn.isEnabled = true
-            val intent = Intent(this, ScreenCapturePermissionActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-            return
-        }
-
+    private fun performCaptureAndTranslate(btn: ImageButton) {
         serviceScope.launch(Dispatchers.IO) {
             try {
                 val bitmap = captureScreen()
-                floatingView?.visibility = View.VISIBLE
-                btn.isEnabled = true
-
+                launch(Dispatchers.Main) {
+                    floatingView?.visibility = View.VISIBLE
+                    btn.isEnabled = true
+                }
                 if (bitmap == null) {
-                    showToast("Could not capture screen. Try again.")
+                    showToast("Pehle button dobara tap karo (screen capture reset hua).")
                     return@launch
                 }
 
-                // OCR
+                showToast("Padhh raha hoon...")
                 val extractedText = OcrProcessor.extractText(bitmap)
 
                 if (extractedText.isBlank()) {
-                    showToast("No English text found on screen.")
+                    showToast("Koi English text nahi mila screen pe.")
                     return@launch
                 }
 
-                // Gemini translation
+                showToast("Hinglish mein badal raha hoon...")
                 val apiKey = GeminiApiKeyStore.get(this@FloatingOverlayService)
+                if (apiKey.isEmpty()) {
+                    showToast("API key nahi hai! App kholo aur Gemini key daalo.")
+                    return@launch
+                }
+
                 val translator = GeminiTranslator(apiKey)
                 val hinglishText = translator.translate(extractedText)
 
-                // Show result
                 launch(Dispatchers.Main) {
-                    showTranslationResult(extractedText, hinglishText)
+                    val intent = Intent(this@FloatingOverlayService, TranslationResultActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                        putExtra(TranslationResultActivity.EXTRA_ORIGINAL, extractedText)
+                        putExtra(TranslationResultActivity.EXTRA_TRANSLATED, hinglishText)
+                    }
+                    startActivity(intent)
                 }
 
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
                     floatingView?.visibility = View.VISIBLE
                     btn.isEnabled = true
-                    showToast("Error: ${e.message}")
+                    showToast("Error: ${e.message?.take(120)}")
                 }
             }
         }
     }
 
     private fun captureScreen(): Bitmap? {
-        if (mediaProjection == null) {
-            val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = projectionManager.getMediaProjection(pendingResultCode, pendingResultData!!)
-        }
+        return try {
+            if (mediaProjection == null) {
+                val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                mediaProjection = projectionManager.getMediaProjection(pendingResultCode, pendingResultData!!)
+            }
+            val metrics = resources.displayMetrics
+            val width = metrics.widthPixels
+            val height = metrics.heightPixels
+            val density = metrics.densityDpi
 
-        val metrics = resources.displayMetrics
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
-        val density = metrics.densityDpi
+            imageReader?.close()
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
 
-        imageReader?.close()
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-
-        val virtualDisplay = mediaProjection!!.createVirtualDisplay(
-            "ScreenCapture",
-            width, height, density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader!!.surface,
-            null, null
-        )
-
-        Thread.sleep(300) // wait for frame
-
-        val image = imageReader!!.acquireLatestImage()
-        val bitmap = if (image != null) {
-            val planes = image.planes
-            val buffer = planes[0].buffer
-            val pixelStride = planes[0].pixelStride
-            val rowStride = planes[0].rowStride
-            val rowPadding = rowStride - pixelStride * width
-            val bmp = Bitmap.createBitmap(
-                width + rowPadding / pixelStride,
-                height,
-                Bitmap.Config.ARGB_8888
+            val virtualDisplay = mediaProjection!!.createVirtualDisplay(
+                "ScreenCapture", width, height, density,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                imageReader!!.surface, null, null
             )
-            bmp.copyPixelsFromBuffer(buffer)
-            image.close()
-            Bitmap.createBitmap(bmp, 0, 0, width, height)
-        } else null
+            Thread.sleep(500)
 
-        virtualDisplay.release()
-        return bitmap
-    }
+            val image = imageReader!!.acquireLatestImage()
+            val bitmap = if (image != null) {
+                val planes = image.planes
+                val buffer = planes[0].buffer
+                val pixelStride = planes[0].pixelStride
+                val rowStride = planes[0].rowStride
+                val rowPadding = rowStride - pixelStride * width
+                val bmp = Bitmap.createBitmap(width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888)
+                bmp.copyPixelsFromBuffer(buffer)
+                image.close()
+                Bitmap.createBitmap(bmp, 0, 0, width, height)
+            } else null
 
-    private fun showTranslationResult(original: String, translated: String) {
-        val intent = Intent(this, TranslationResultActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            putExtra(TranslationResultActivity.EXTRA_ORIGINAL, original)
-            putExtra(TranslationResultActivity.EXTRA_TRANSLATED, translated)
+            virtualDisplay.release()
+            bitmap
+        } catch (e: Exception) {
+            mediaProjection = null
+            pendingResultCode = 0
+            pendingResultData = null
+            null
         }
-        startActivity(intent)
     }
 
     private fun showToast(msg: String) {
@@ -270,35 +264,22 @@ class FloatingOverlayService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Manga Translator",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
+            val channel = NotificationChannel(CHANNEL_ID, "Manga Translator", NotificationManager.IMPORTANCE_LOW).apply {
                 description = "Manga Hinglish Translator floating service"
                 setShowBadge(false)
             }
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     private fun buildNotification(): Notification {
-        val openIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val stopIntent = PendingIntent.getService(
-            this, 1,
-            Intent(this, FloatingOverlayService::class.java).apply {
-                action = "STOP"
-            },
-            PendingIntent.FLAG_IMMUTABLE
-        )
+        val openIntent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val stopIntent = PendingIntent.getService(this, 1,
+            Intent(this, FloatingOverlayService::class.java).apply { action = "STOP" },
+            PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Manga Hinglish Translator")
-            .setContentText("Floating button is active. Tap it to translate manga text.")
+            .setContentText("Purple button active — tap karo translate karne ke liye!")
             .setSmallIcon(R.drawable.ic_translate)
             .setContentIntent(openIntent)
             .addAction(0, "Stop", stopIntent)
