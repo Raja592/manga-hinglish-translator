@@ -6,6 +6,9 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -19,6 +22,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
@@ -29,18 +33,16 @@ import kotlinx.coroutines.launch
 class FloatingOverlayService : Service() {
 
     companion object {
-    var isRunning = false
-
-    const val ACTION_PROJECTION_GRANTED = "ACTION_PROJECTION_GRANTED"
-    const val EXTRA_RESULT_CODE = "extra_result_code"
-    const val EXTRA_RESULT_DATA = "extra_result_data"
-
-    private const val CHANNEL_ID = "manga_translator_channel"
-    private const val NOTIF_ID = 1001
-}
+        var isRunning = false
+        private const val CHANNEL_ID = "manga_translator_channel"
+        private const val NOTIF_ID = 1001
+    }
 
     private lateinit var windowManager: WindowManager
     private var floatingView: View? = null
+    private var resultView: View? = null   // small floating result card
+    private var resultParams: WindowManager.LayoutParams? = null
+
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val handler = Handler(Looper.getMainLooper())
 
@@ -72,10 +74,7 @@ class FloatingOverlayService : Service() {
             else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 50; y = 300
-        }
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = 50; y = 300 }
 
         windowManager.addView(floatingView, params)
         val btn = floatingView!!.findViewById<ImageButton>(R.id.ibTranslate)
@@ -102,25 +101,23 @@ class FloatingOverlayService : Service() {
 
         val svc = MangaAccessibilityService.instance
         if (svc == null) {
-            showToast("\u26a0\ufe0f Accessibility service enable karo! App mein jaake Step 2 pe Grant karo.")
+            showToast("Accessibility service enable karo! App mein jaake Step 2 pe Enable karo.")
             return
         }
+
+        // Dismiss any previous result
+        dismissResult()
 
         btn.isEnabled = false
         floatingView?.visibility = View.INVISIBLE
 
-        // Wait for overlay to disappear, then capture
         handler.postDelayed({
             svc.captureScreen { bitmap ->
-                // callback is on main thread
                 handler.post {
                     floatingView?.visibility = View.VISIBLE
                     btn.isEnabled = true
                 }
-                if (bitmap == null) {
-                    showToast("Screenshot nahi hua. Dobara try karo.")
-                    return@captureScreen
-                }
+                if (bitmap == null) { showToast("Screenshot nahi hua. Dobara try karo."); return@captureScreen }
                 serviceScope.launch(Dispatchers.IO) { processCapture(bitmap) }
             }
         }, 300)
@@ -132,22 +129,77 @@ class FloatingOverlayService : Service() {
             val text = OcrProcessor.extractText(bitmap)
             if (text.isBlank()) { showToast("Screen pe koi English text nahi mila."); return }
 
-            showToast("Hinglish mein badal raha hoon...")
+            showToast("Translate ho raha hai...")
             val apiKey = GeminiApiKeyStore.get(this)
             if (apiKey.isEmpty()) { showToast("Gemini API key nahi hai! App kholo aur key daalo."); return }
 
             val translated = GeminiTranslator(apiKey).translate(text)
 
-            handler.post {
-                startActivity(Intent(this, TranslationResultActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    putExtra(TranslationResultActivity.EXTRA_ORIGINAL, text)
-                    putExtra(TranslationResultActivity.EXTRA_TRANSLATED, translated)
-                })
-            }
+            handler.post { showFloatingResult(translated) }
         } catch (e: Exception) {
             showToast("Error: " + (e.message ?: "Unknown").take(80))
         }
+    }
+
+    // ── Small floating result card ──────────────────────────────────
+    @SuppressLint("ClickableViewAccessibility", "InflateParams")
+    private fun showFloatingResult(hinglishText: String) {
+        dismissResult()
+
+        val view = LayoutInflater.from(this).inflate(R.layout.floating_result, null)
+        view.findViewById<TextView>(R.id.tvResultHinglish).text = hinglishText
+
+        view.findViewById<ImageButton>(R.id.ibCloseResult).setOnClickListener { dismissResult() }
+
+        view.findViewById<android.widget.Button>(R.id.btnResultCopy).setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("Hinglish", hinglishText))
+            showToast("Copied!")
+        }
+
+        val metrics = resources.displayMetrics
+        val widthPx = (300 * metrics.density).toInt()
+
+        val params = WindowManager.LayoutParams(
+            widthPx,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = 80
+        }
+
+        // Make result card draggable too
+        var ix = 0; var iy = 0; var tx = 0f; var ty = 0f; var drag = false
+        view.setOnTouchListener { _, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { ix = params.x; iy = params.y; tx = e.rawX; ty = e.rawY; drag = false; true }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (e.rawX - tx).toInt(); val dy = (e.rawY - ty).toInt()
+                    if (dx * dx + dy * dy > 25) drag = true
+                    if (drag) { params.x = ix + dx; params.y = iy + dy; windowManager.updateViewLayout(view, params) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> { if (drag) true else false }
+                else -> false
+            }
+        }
+
+        windowManager.addView(view, params)
+        resultView = view
+        resultParams = params
+    }
+
+    private fun dismissResult() {
+        resultView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        resultView = null
+        resultParams = null
     }
 
     private fun showToast(msg: String) {
@@ -157,7 +209,8 @@ class FloatingOverlayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
-        floatingView?.let { windowManager.removeView(it) }
+        dismissResult()
+        floatingView?.let { try { windowManager.removeView(it) } catch (_: Exception) {} }
     }
 
     private fun createNotificationChannel() {
